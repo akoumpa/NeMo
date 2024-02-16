@@ -634,6 +634,10 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
         # we zero grads here because we also call backward in the megatron-core fwd/bwd functions
         self._optimizer.zero_grad()
 
+        dme_group = parallel_state.get_data_modulo_expert_parallel_group()
+        if self.cfg.get('expert_model_parallel_size', 1) > 1 and torch.distributed.get_world_size(group=dme_group) > 1:
+            self.allreduce_expert_parallel_gradients()
+
         if self.with_distributed_adam:
             # hack to enable overlapping param sync and forward compute
             # note: the distributed optimizer monkey-patches each
@@ -746,6 +750,45 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             We want this to do nothing as we are zeroing grads during the training_step.
         """
         return
+
+    def _append_expert_parallel_module_grads(self, module, grads):
+        """ Helper method for allreduce_expert_parallel_gradients"""
+
+        for param in module.parameters():
+            expert_parallel_param = getattr(param, 'allreduce', False)
+            # (@adithyare) adapter training now extends MegatronGPTModel
+            # so we have to add this check here to ensure we do not
+            # perform all_reduce when grad is None.
+            # grad can be None when performing PeFT training.
+            if expert_parallel_param and param.requires_grad:
+                if self.megatron_amp_O2:
+                    grad = param.main_grad
+                else:
+                    grad = param.grad
+                if grad is None: continue
+                grads.append(grad.data)
+
+    def allreduce_expert_parallel_gradients(self):
+        """ All-reduce expert parameters across model parallel nodes when expert parallelism is used.
+            Modified from megatron-lm:
+        """
+
+        grads = []
+        if isinstance(self.model, list):
+            for module in self.model:
+                self._append_expert_parallel_module_grads(module, grads)
+        else:
+            self._append_expert_parallel_module_grads(self.model, grads)
+
+        coalesced = torch._utils._flatten_dense_tensors(grads)
+        # TODO(akoumparouli): switch to ReduceOp.AVG https://github.com/pytorch/pytorch/blob/d0fc268918236d8a56cc0ad82ace001160281a17/torch/_C/_distributed_c10d.pyi#L110C5-L110C8
+        # once it's available to avoid dividing grads manually later.
+        dme_group = parallel_state.get_data_modulo_expert_parallel_group()
+        torch.distributed.all_reduce(coalesced, group=dme_group)
+        data_modulo_expert_parallel_group_size = torch.distributed.get_world_size(group=dme_group)
+        for buf, synced in zip(grads, torch._utils._unflatten_dense_tensors(coalesced, grads)):
+            synced /= data_modulo_expert_parallel_group_size
+            buf.copy_(synced)
 
     def _append_sequence_parallel_module_grads(self, module, grads):
         """ Helper method for allreduce_sequence_parallel_gradients"""
