@@ -351,28 +351,22 @@ def get_params_for_weight_decay_optimization(
 
     Layernorms and biases will have no weight decay but the rest will.
     """
-    modules = listify_model(model)
+    # modules = listify_model(model)
     weight_decay_params = {'params': [], 'is_expert': False}
     weight_decay_expert_params = {'params': [], 'is_expert': True}
     no_weight_decay_params = {'params': [], 'weight_decay': 0.0, 'is_expert': False}
-    for module in modules:
-        for module_ in module.modules():
-            is_expert = lambda param: not getattr(param, 'allreduce', True)
-            if isinstance(module_, (FusedLayerNorm, FastLayerNorm, MixedFusedRMSNorm)):
-                no_weight_decay_params['params'].extend(
-                    filter(lambda p: p is not None, module_._parameters.values())
-                )
+    # EP params have the 'allreduce' attr set.
+    is_expert = lambda param: not getattr(param, 'allreduce', True)
+    # Do the actual param classification
+    for name, param in model.named_parameters():
+        if param is None: continue
+        if name.endswith('.bias'):
+            no_weight_decay_params['params'].extend([param])
+        else:
+            if is_expert(param):
+                weight_decay_expert_params['params'].extend([param])
             else:
-                weight_decay_params['params'].extend(
-                    [p for n, p in list(module_._parameters.items()) if p is not None and n != 'bias' and not is_expert(p)]
-                )
-                weight_decay_expert_params['params'].extend(
-                    [p for n, p in list(module_._parameters.items()) if p is not None and n != 'bias' and is_expert(p)]
-                )
-                no_weight_decay_params['params'].extend(
-                    [p for n, p in list(module_._parameters.items()) if p is not None and n == 'bias']
-                )
-
+                weight_decay_params['params'].extend([param])
     return weight_decay_params, weight_decay_expert_params, no_weight_decay_params
 
 
