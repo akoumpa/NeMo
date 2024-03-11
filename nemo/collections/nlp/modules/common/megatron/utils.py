@@ -376,11 +376,14 @@ def get_all_params_for_weight_decay_optimization(
     """Use all params for weight decay."""
     modules = listify_model(model)
 
-    weight_decay_params = [
-        p for module in modules for module_ in module.modules() for p in module_._parameters.values() if p is not None
-    ]
+    weight_decay_params = {'params': [], 'is_expert': False}
+    weight_decay_expert_params = {'params': [], 'is_expert': True}
 
-    return ({'params': weight_decay_params},)
+    # populate with params
+    weight_decay_params['params'] = list(filter(lambda x: not is_expert(x), model.parameters()))
+    weight_decay_expert_params['params'] = list(filter(is_expert, model.parameters()))
+
+    return weight_decay_params, weight_decay_expert_params
 
 
 def get_iterator_k_split(batch: List[torch.Tensor], num_microbatches: int) -> Iterator:
