@@ -352,23 +352,28 @@ def get_params_for_weight_decay_optimization(
     Layernorms and biases will have no weight decay but the rest will.
     """
     modules = listify_model(model)
-    weight_decay_params = {'params': []}
-    no_weight_decay_params = {'params': [], 'weight_decay': 0.0}
+    weight_decay_params = {'params': [], 'is_expert': False}
+    weight_decay_expert_params = {'params': [], 'is_expert': True}
+    no_weight_decay_params = {'params': [], 'weight_decay': 0.0, 'is_expert': False}
     for module in modules:
         for module_ in module.modules():
+            is_expert = lambda param: not getattr(param, 'allreduce', True)
             if isinstance(module_, (FusedLayerNorm, FastLayerNorm, MixedFusedRMSNorm)):
                 no_weight_decay_params['params'].extend(
-                    [p for p in list(module_._parameters.values()) if p is not None]
+                    filter(lambda p: p is not None, module_._parameters.values())
                 )
             else:
                 weight_decay_params['params'].extend(
-                    [p for n, p in list(module_._parameters.items()) if p is not None and n != 'bias']
+                    [p for n, p in list(module_._parameters.items()) if p is not None and n != 'bias' and not is_expert(p)]
+                )
+                weight_decay_expert_params['params'].extend(
+                    [p for n, p in list(module_._parameters.items()) if p is not None and n != 'bias' and is_expert(p)]
                 )
                 no_weight_decay_params['params'].extend(
                     [p for n, p in list(module_._parameters.items()) if p is not None and n == 'bias']
                 )
 
-    return weight_decay_params, no_weight_decay_params
+    return weight_decay_params, weight_decay_expert_params, no_weight_decay_params
 
 
 def get_all_params_for_weight_decay_optimization(
