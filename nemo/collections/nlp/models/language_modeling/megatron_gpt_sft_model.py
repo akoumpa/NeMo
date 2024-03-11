@@ -266,10 +266,6 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
                 assert data_cfg.micro_batch_size == 1, "Micro batch size must be 1 if using packed sequence"
             else:
                 dataset_cls = GPTSFTDataset
-            # TODO(akoumparouli): use packed sequence instead?
-            pad_to_max = data_cfg.get('pad_to_max_length', False)
-            if self.cfg.get('expert_model_parallel_size', 0) > 1:
-                pad_to_max = True
             dataset = dataset_cls(
                 file_path=file_path,
                 tokenizer=self.tokenizer,
@@ -285,7 +281,7 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
                 label_key=data_cfg.get('label_key', 'answer'),
                 answer_only_loss=self.cfg.get('answer_only_loss', True),
                 truncation_field=data_cfg.get('truncation_field', 'text'),
-                pad_to_max_length=pad_to_max,
+                pad_to_max_length=data_cfg.get('pad_to_max_length', False),
                 index_mapping_dir=data_cfg.get('index_mapping_dir', None),
                 prompt_template=data_cfg.get('prompt_template', None),
                 virtual_tokens=self.virtual_tokens,
@@ -400,7 +396,6 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
                 loss_mean = []
             else:
                 loss_mean = torch.tensor(0.0).cuda()
-
         return loss_mean
 
     def validation_step(self, dataloader_iter, batch_idx, dataloader_idx=0):
